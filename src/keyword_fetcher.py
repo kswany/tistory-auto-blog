@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import warnings
 from pathlib import Path
 
 from pytrends.request import TrendReq
@@ -14,12 +16,42 @@ def load_seed_keywords(config_path: Path | None = None) -> tuple[list[str], str]
     return data.get("keywords", []), data.get("geo", "KR")
 
 
+def _ssl_verify_enabled() -> bool:
+    return os.getenv("SKIP_SSL_VERIFY", "").lower() not in {"1", "true", "yes"}
+
+
+def _create_trend_client() -> TrendReq:
+    requests_args: dict = {}
+    if not _ssl_verify_enabled():
+        requests_args["verify"] = False
+        try:
+            import urllib3
+
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
+
+    return TrendReq(hl="ko-KR", tz=540, requests_args=requests_args)
+
+
+def _fallback_from_seeds(seed_keywords: list[str], reason: str) -> list[dict]:
+    warnings.warn(f"Google Trends 사용 불가 → 시드 키워드로 대체 ({reason})")
+    return [
+        {"keyword": seed, "source": "seed_fallback", "score": 50 - index}
+        for index, seed in enumerate(seed_keywords)
+    ]
+
+
 def fetch_google_trends(seed_keywords: list[str], geo: str = "KR") -> list[dict]:
     """시드 키워드별 연관 검색어와 급상승 키워드를 수집합니다."""
     if not seed_keywords:
         return []
 
-    pytrends = TrendReq(hl="ko-KR", tz=540)
+    try:
+        pytrends = _create_trend_client()
+    except Exception as exc:
+        return _fallback_from_seeds(seed_keywords, str(exc))
+
     candidates: list[dict] = []
 
     try:
@@ -45,6 +77,9 @@ def fetch_google_trends(seed_keywords: list[str], geo: str = "KR") -> list[dict]
                     )
         except Exception:
             continue
+
+    if not candidates:
+        return _fallback_from_seeds(seed_keywords, "수집 결과 없음 (회사망 SSL 또는 Trends 차단 가능)")
 
     return candidates
 

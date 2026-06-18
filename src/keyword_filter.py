@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -30,3 +31,19 @@ def select_top_keywords(candidates: list[dict], limit: int = 5) -> list[str]:
         ranked.append((int(item.get("score", 0)), keyword))
 
     return [keyword for _, keyword in ranked[:limit]]
+
+
+def save_posted_keywords(keywords: list[str], data_path: Path | None = None) -> None:
+    path = data_path or Path(__file__).resolve().parents[1] / "data" / "posted_keywords.json"
+    if path.exists():
+        data = json.loads(path.read_text(encoding="utf-8"))
+    else:
+        data = {"keywords": [], "last_updated": None}
+
+    existing = {k.strip().lower(): k for k in data.get("keywords", [])}
+    for keyword in keywords:
+        existing[keyword.strip().lower()] = keyword.strip()
+
+    data["keywords"] = list(existing.values())
+    data["last_updated"] = datetime.now(timezone.utc).isoformat()
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

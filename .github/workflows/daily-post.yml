@@ -25,9 +25,13 @@ jobs:
       - name: Run blog pipeline
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          TISTORY_POST_EMAIL: ${{ secrets.TISTORY_POST_EMAIL }}
+          TISTORY_BLOG: happy-life-smile
+          TISTORY_CATEGORY_ID: ${{ secrets.TISTORY_CATEGORY_ID }}
+          TISTORY_COOKIE: ${{ secrets.TISTORY_COOKIE }}
+          DRY_RUN: "0"
+          PUBLISH_ONLY: "0"
+          POST_LIMIT: "5"
+          POST_DELAY_SECONDS: "30"
         run: python src/main.py
 
       - name: Save posted keyword history

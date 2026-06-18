@@ -1,0 +1,8 @@
+{
+  "blog_name": "줍줍토리의 오늘 한입 정보",
+  "tone": "친근하고 쉬운 설명, 정보 위주, 과장 없이",
+  "categories_hint": "정부정책, 재테크, IT·AI, 생활 이슈",
+  "min_chars": 1200,
+  "max_chars": 2000,
+  "format_style": "짧은 문단, 문단 사이 여백, 핵심어 bold, h2 소제목, ul/li 목록"
+}
