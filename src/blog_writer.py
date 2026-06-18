@@ -131,7 +131,7 @@ def format_readable_html(html: str) -> str:
     return f'<div style="line-height:1.95; word-break:keep-all;">{html}</div>'
 
 
-def write_blog_post(keyword: str) -> dict:
+def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
@@ -141,12 +141,23 @@ def write_blog_post(keyword: str) -> dict:
     model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     model = genai.GenerativeModel(model_name)
 
+    trend_section = ""
+    if trend_context and trend_context.strip():
+        trend_section = f"""
+[현재 트렌드 배경 — 반드시 반영]
+아래는 실제 급상승 검색·뉴스 맥락입니다. 키워드만 아는 일반론·백과사전식 소개는 금지합니다.
+이 이슈가 지금 뜨는 이유, 관련 뉴스·연관 검색어를 본문 전반에 자연스럽게 녹여 작성하세요.
+
+{trend_context.strip()}
+"""
+
     prompt = f"""
 당신은 한국어 블로그 '{config["blog_name"]}'의 작가입니다.
 독자에게 {config["tone"]} 톤으로 실용 정보를 전달합니다.
 
 키워드: {keyword}
 카테고리 방향: {config["categories_hint"]}
+{trend_section}
 
 아래 JSON 형식만 출력하세요. 다른 설명은 금지합니다.
 {{
@@ -184,6 +195,7 @@ def write_blog_post(keyword: str) -> dict:
 
 [내용]
 - 본문 {config["min_chars"]}~{config["max_chars"]}자
+- 트렌드 배경이 있으면 그 이슈·뉴스 맥락 중심으로 작성 (단순 키워드 정의 금지)
 - 신청 방법, 조건, 주의사항 포함
 - 허위·과장 금지
 - tags 한국어 5개

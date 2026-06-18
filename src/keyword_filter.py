@@ -15,10 +15,11 @@ def load_posted_keywords(data_path: Path | None = None) -> set[str]:
     return {k.strip().lower() for k in data.get("keywords", [])}
 
 
-def select_top_keywords(candidates: list[dict], limit: int = 5) -> list[str]:
+def select_top_candidate_items(candidates: list[dict], limit: int = 5) -> list[dict]:
+    """게시 이력·중복 제외 후 상위 N개 후보(dict)를 반환합니다."""
     posted = load_posted_keywords()
     seen: set[str] = set()
-    ranked: list[tuple[int, str]] = []
+    selected: list[dict] = []
 
     for item in sorted(candidates, key=lambda x: x.get("score", 0), reverse=True):
         keyword = str(item.get("keyword", "")).strip()
@@ -28,9 +29,15 @@ def select_top_keywords(candidates: list[dict], limit: int = 5) -> list[str]:
         if normalized in posted or normalized in seen:
             continue
         seen.add(normalized)
-        ranked.append((int(item.get("score", 0)), keyword))
+        selected.append(item)
+        if len(selected) >= limit:
+            break
 
-    return [keyword for _, keyword in ranked[:limit]]
+    return selected
+
+
+def select_top_keywords(candidates: list[dict], limit: int = 5) -> list[str]:
+    return [item["keyword"] for item in select_top_candidate_items(candidates, limit=limit)]
 
 
 def save_posted_keywords(keywords: list[str], data_path: Path | None = None) -> None:

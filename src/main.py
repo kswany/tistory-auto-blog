@@ -11,8 +11,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from blog_writer import format_readable_html, write_blog_post
-from keyword_fetcher import fetch_google_trends, has_external_keywords, load_seed_keywords
-from keyword_filter import save_posted_keywords, select_top_keywords
+from keyword_fetcher import fetch_keyword_candidates, has_external_keywords, load_seed_keywords
+from keyword_filter import save_posted_keywords, select_top_candidate_items
+from topic_filter import filter_blog_topics, format_trend_context, topic_match_reason
 from tistory_publisher import publish_to_tistory
 
 load_dotenv()
@@ -66,9 +67,27 @@ def _load_posts_from_logs() -> list[dict]:
     return posts[:limit]
 
 
+def _publish_with_retry(post: dict) -> None:
+    delay = int(os.getenv("POST_DELAY_SECONDS", "30"))
+    max_retries = max(1, int(os.getenv("PUBLISH_RETRIES", "3")))
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            publish_to_tistory(post)
+            return
+        except Exception as exc:
+            if attempt >= max_retries:
+                raise
+            wait = delay * attempt
+            print(f"  게시 실패 ({attempt}/{max_retries}): {exc}")
+            print(f"  {wait}초 후 재시도...")
+            time.sleep(wait)
+
+
 def _publish_posts(posts: list[dict]) -> None:
     delay = int(os.getenv("POST_DELAY_SECONDS", "30"))
     published_keywords: list[str] = []
+    failed_posts: list[str] = []
 
     for index, post in enumerate(posts, start=1):
         print(f"\n[{index}/{len(posts)}] '{post.get('keyword', '')}' 처리 중...")
@@ -79,16 +98,28 @@ def _publish_posts(posts: list[dict]) -> None:
             continue
 
         print("  티스토리 게시 중...")
-        publish_to_tistory(post)
+        try:
+            _publish_with_retry(post)
+        except Exception as exc:
+            label = post.get("keyword") or post["title"]
+            failed_posts.append(label)
+            print(f"  ❌ 최종 게시 실패: {exc}")
+            continue
+
         print("  게시 완료")
         if post.get("keyword"):
+            save_posted_keywords([post["keyword"]])
             published_keywords.append(post["keyword"])
 
         if index < len(posts):
             time.sleep(delay)
 
+    if failed_posts:
+        print(f"\n⚠️ {len(published_keywords)}편 성공, {len(failed_posts)}편 실패")
+        print(f"   실패: {failed_posts}")
+        raise SystemExit(1)
+
     if published_keywords:
-        save_posted_keywords(published_keywords)
         print(f"\n완료: {len(published_keywords)}편 게시")
     elif _is_dry_run():
         print("\n완료: DRY_RUN 모드 (게시 안 함)")
@@ -106,8 +137,7 @@ def main() -> None:
 
     limit = _post_limit()
     seeds, geo = load_seed_keywords()
-    candidates = fetch_google_trends(seeds, geo)
-    top5 = select_top_keywords(candidates, limit=limit)
+    candidates = fetch_keyword_candidates(seeds, geo)
 
     source_counts: dict[str, int] = {}
     for item in candidates:
@@ -125,17 +155,43 @@ def main() -> None:
         print("   ALLOW_SEED_FALLBACK=1 → 시드 키워드로 계속 진행")
 
     print("✅ 외부 API에서 후보 키워드 수집 성공")
-    print(f"후보 {len(candidates)}개 중 상위 {limit}개:")
-    for i, keyword in enumerate(top5, start=1):
-        print(f"{i}. {keyword}")
 
-    if len(top5) < limit:
-        raise SystemExit(f"키워드가 {limit}개 미만입니다: {len(top5)}개")
+    filtered = filter_blog_topics(candidates)
+    allowed_keywords = {item["keyword"] for item in filtered}
+    excluded = [item for item in candidates if item["keyword"] not in allowed_keywords]
+    if excluded:
+        print(f"주제 필터: {len(candidates)}개 → {len(filtered)}개 (제외 {len(excluded)}개)")
+        for item in excluded[:8]:
+            _ok, reason = topic_match_reason(item)
+            print(f"  제외: {item.get('keyword')} ({reason})")
+        if len(excluded) > 8:
+            print(f"  ... 외 {len(excluded) - 8}개")
+
+    top_items = select_top_candidate_items(filtered, limit=limit)
+    print(f"필터 후 상위 {limit}개:")
+    for i, item in enumerate(top_items, start=1):
+        volume = item.get("search_volume")
+        vol_label = f" (vol={volume:,})" if isinstance(volume, int) and volume else ""
+        print(f"{i}. {item['keyword']}{vol_label}")
+
+    if len(filtered) < limit:
+        raise SystemExit(
+            f"주제 필터 후 키워드가 {limit}개 미만입니다: {len(filtered)}개 → 글 작성·게시 중단"
+        )
+
+    if len(top_items) < limit:
+        raise SystemExit(
+            f"게시 이력 제외 후 키워드가 {limit}개 미만입니다: {len(top_items)}개 → 중단"
+        )
 
     posts: list[dict] = []
-    for index, keyword in enumerate(top5, start=1):
+    for index, item in enumerate(top_items, start=1):
+        keyword = item["keyword"]
+        trend_context = format_trend_context(item)
         print(f"\n[{index}/{limit}] '{keyword}' 글 작성 중...")
-        post = write_blog_post(keyword)
+        if trend_context:
+            print(f"  트렌드 맥락:\n{trend_context.replace(chr(10), chr(10) + '  ')}")
+        post = write_blog_post(keyword, trend_context=trend_context or None)
         _save_post_log(post)
         posts.append(post)
         print(f"  제목: {post['title']}")

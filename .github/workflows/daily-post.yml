@@ -25,16 +25,23 @@ jobs:
       - name: Run blog pipeline
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+          SERPAPI_GEO: KR
+          SERPAPI_ONLY_ACTIVE: "1"
+          SERPAPI_HOURS: "24"
+          SERPAPI_FALLBACK: "0"
           TISTORY_BLOG: happy-life-smile
           TISTORY_CATEGORY_ID: ${{ secrets.TISTORY_CATEGORY_ID }}
           TISTORY_COOKIE: ${{ secrets.TISTORY_COOKIE }}
           DRY_RUN: "0"
           PUBLISH_ONLY: "0"
           POST_LIMIT: "5"
-          POST_DELAY_SECONDS: "30"
+          POST_DELAY_SECONDS: "60"
+          PUBLISH_RETRIES: "3"
         run: python src/main.py
 
       - name: Save posted keyword history
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

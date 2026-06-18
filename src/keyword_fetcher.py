@@ -43,6 +43,96 @@ def _request_get(url: str, params: dict | None = None) -> requests.Response:
     )
 
 
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").lower() in {"1", "true", "yes"}
+
+
+def _extract_news_titles(item: dict) -> list[str]:
+    titles: list[str] = []
+    news = item.get("news_item") or item.get("ht:news_item")
+    if isinstance(news, list):
+        for entry in news:
+            if not isinstance(entry, dict):
+                continue
+            title = entry.get("news_item_title") or entry.get("ht:news_item_title")
+            if title:
+                titles.append(str(title).strip())
+    elif isinstance(news, dict):
+        title = news.get("news_item_title") or news.get("ht:news_item_title")
+        if title:
+            titles.append(str(title).strip())
+    return titles
+
+
+def _extract_categories(item: dict) -> list[dict]:
+    categories: list[dict] = []
+    for category in item.get("categories") or []:
+        if not isinstance(category, dict):
+            continue
+        categories.append(
+            {
+                "id": category.get("id"),
+                "name": category.get("name"),
+            }
+        )
+    return categories
+
+
+def _extract_trend_breakdown(item: dict) -> list[str]:
+    breakdown = item.get("trend_breakdown") or []
+    return [str(term).strip() for term in breakdown if str(term).strip()]
+
+
+def fetch_serpapi_trending(geo: str | None = None) -> list[dict]:
+    """SerpApi Google Trends Trending Now — 한국 급상승 검색어 (시드 불필요)."""
+    api_key = os.getenv("SERPAPI_KEY")
+    if not api_key:
+        return []
+
+    geo_code = geo or os.getenv("SERPAPI_GEO", "KR")
+    only_active = os.getenv("SERPAPI_ONLY_ACTIVE", "1").lower() in {"1", "true", "yes"}
+    params: dict[str, str] = {
+        "engine": "google_trends_trending_now",
+        "geo": geo_code,
+        "api_key": api_key,
+        "hl": "ko",
+        "hours": os.getenv("SERPAPI_HOURS", "24"),
+    }
+    if only_active:
+        params["only_active"] = "true"
+
+    response = _request_get("https://serpapi.com/search", params)
+    response.raise_for_status()
+    data = response.json()
+
+    if data.get("error"):
+        raise RuntimeError(f"SerpApi 오류: {data['error']}")
+
+    candidates: list[dict] = []
+    for item in data.get("trending_searches", []):
+        if only_active and not item.get("active", True):
+            continue
+        keyword = str(item.get("query", "")).strip()
+        if len(keyword) < 2:
+            continue
+        volume = int(item.get("search_volume") or 0)
+        candidates.append(
+            {
+                "keyword": keyword,
+                "source": "serpapi_trending",
+                "score": volume,
+                "search_volume": volume,
+                "increase_percentage": item.get("increase_percentage"),
+                "categories": _extract_categories(item),
+                "trend_breakdown": _extract_trend_breakdown(item),
+                "news_titles": _extract_news_titles(item),
+            }
+        )
+
+    candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
+    return candidates
+
+
 def _fallback_from_seeds(seed_keywords: list[str], reason: str) -> list[dict]:
     warnings.warn(f"외부 키워드 수집 실패 → 시드 키워드로 대체 ({reason})")
     return [
@@ -176,7 +266,7 @@ def has_external_keywords(candidates: list[dict]) -> bool:
 
 
 def fetch_google_trends(seed_keywords: list[str], geo: str = "KR") -> list[dict]:
-    """시드 키워드 기반으로 후보 키워드를 수집합니다."""
+    """시드 키워드 기반으로 후보 키워드를 수집합니다 (자동완성·pytrends)."""
     if not seed_keywords:
         return []
 
@@ -190,13 +280,80 @@ def fetch_google_trends(seed_keywords: list[str], geo: str = "KR") -> list[dict]
     return candidates
 
 
-if __name__ == "__main__":
-    seeds, geo = load_seed_keywords()
-    results = fetch_google_trends(seeds, geo)
+def fetch_keyword_candidates(seed_keywords: list[str], geo: str = "KR") -> list[dict]:
+    """SerpApi 급상승 우선. SERPAPI_FALLBACK=1 일 때만 자동완성·pytrends."""
+    api_key = os.getenv("SERPAPI_KEY")
+    if api_key:
+        try:
+            serpapi = fetch_serpapi_trending(geo)
+            if serpapi:
+                return serpapi
+            if not _env_flag("SERPAPI_FALLBACK"):
+                return []
+        except Exception as exc:
+            warnings.warn(f"SerpApi 수집 실패 ({exc})")
+            if not _env_flag("SERPAPI_FALLBACK"):
+                return []
+
+    if _env_flag("SERPAPI_FALLBACK") or not api_key:
+        return fetch_google_trends(seed_keywords, geo)
+
+    return []
+
+
+def _print_candidate_report(results: list[dict], limit: int = 20, verbose: bool = False) -> None:
     source_counts: dict[str, int] = {}
     for item in results:
-        source = item["source"]
+        source = str(item.get("source", "unknown"))
         source_counts[source] = source_counts.get(source, 0) + 1
-    print("수집 출처:", source_counts)
-    for item in results[:20]:
-        print(f"{item['score']:>3} | {item['keyword']} ({item['source']})")
+    print(f"수집 출처: {source_counts}")
+    print(f"후보 {len(results)}개 (상위 {limit}개):")
+    for index, item in enumerate(results[:limit], start=1):
+        volume = item.get("search_volume")
+        extra = f" vol={volume:,}" if isinstance(volume, int) and volume else ""
+        print(f"{index:>2}. [{item.get('score', 0):>7}] {item['keyword']} ({item.get('source')}){extra}")
+        if verbose:
+            categories = [c.get("name") for c in item.get("categories") or [] if c.get("name")]
+            if categories:
+                print(f"     분류: {', '.join(categories)}")
+            news_titles = item.get("news_titles") or []
+            if news_titles:
+                print(f"     뉴스: {news_titles[0][:60]}...")
+            breakdown = item.get("trend_breakdown") or []
+            if breakdown:
+                print(f"     연관: {', '.join(breakdown[:4])}")
+
+
+if __name__ == "__main__":
+    import sys
+
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
+    if "--test-serpapi" in sys.argv:
+        from topic_filter import filter_blog_topics, topic_match_reason
+
+        print("=== SerpApi Trending Now (geo=KR) 테스트 ===")
+        if not os.getenv("SERPAPI_KEY"):
+            raise SystemExit("SERPAPI_KEY 가 .env 또는 환경변수에 없습니다.")
+        results = fetch_serpapi_trending()
+        if not results:
+            raise SystemExit("SerpApi 결과가 비어 있습니다.")
+        _print_candidate_report(results, limit=15, verbose=True)
+
+        if "--filter" in sys.argv:
+            print("\n=== 주제 필터 적용 (줍줍토리) ===")
+            allowed_keywords = {item["keyword"] for item in filter_blog_topics(results)}
+            filtered = filter_blog_topics(results)
+            print(f"필터 전 {len(results)}개 → 후 {len(filtered)}개")
+            for item in results:
+                if item["keyword"] not in allowed_keywords:
+                    _ok, reason = topic_match_reason(item)
+                    print(f"  제외: {item['keyword']} ({reason})")
+            _print_candidate_report(filtered, limit=10, verbose=True)
+        sys.exit(0)
+
+    seeds, geo = load_seed_keywords()
+    results = fetch_keyword_candidates(seeds, geo)
+    _print_candidate_report(results)
