@@ -11,7 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from blog_writer import format_readable_html, write_blog_post
-from keyword_fetcher import fetch_google_trends, load_seed_keywords
+from keyword_fetcher import fetch_google_trends, has_external_keywords, load_seed_keywords
 from keyword_filter import save_posted_keywords, select_top_keywords
 from tistory_publisher import publish_to_tistory
 
@@ -109,7 +109,22 @@ def main() -> None:
     candidates = fetch_google_trends(seeds, geo)
     top5 = select_top_keywords(candidates, limit=limit)
 
+    source_counts: dict[str, int] = {}
+    for item in candidates:
+        source = str(item.get("source", "unknown"))
+        source_counts[source] = source_counts.get(source, 0) + 1
+
     print(f"시드 키워드: {seeds}")
+    print(f"키워드 수집 출처: {source_counts}")
+
+    if not has_external_keywords(candidates):
+        print("❌ 외부 키워드 수집 실패 → 시드 대체 모드")
+        print("   같은 키워드 반복 작성을 막기 위해 이번 실행은 중단합니다.")
+        if not _env_flag("ALLOW_SEED_FALLBACK"):
+            raise SystemExit(1)
+        print("   ALLOW_SEED_FALLBACK=1 → 시드 키워드로 계속 진행")
+
+    print("✅ 외부 API에서 후보 키워드 수집 성공")
     print(f"후보 {len(candidates)}개 중 상위 {limit}개:")
     for i, keyword in enumerate(top5, start=1):
         print(f"{i}. {keyword}")
