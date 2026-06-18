@@ -1,0 +1,39 @@
+name: Daily Tistory Blog Post
+
+on:
+  schedule:
+    # UTC 00:00 = KST 09:00
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run blog pipeline
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TISTORY_POST_EMAIL: ${{ secrets.TISTORY_POST_EMAIL }}
+        run: python src/main.py
+
+      - name: Save posted keyword history
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/posted_keywords.json
+          git diff --staged --quiet || git commit -m "chore: update posted keywords"
+          git push
