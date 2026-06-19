@@ -186,6 +186,11 @@ def main() -> None:
             f"게시 이력 제외 후 키워드가 {limit}개 미만입니다: {len(top_items)}개 → 중단"
         )
 
+    if not _is_dry_run():
+        print("티스토리 세션 확인 중...", flush=True)
+        validate_tistory_session()
+        print("✅ 티스토리 쿠키 유효", flush=True)
+
     posts: list[dict] = []
     for index, item in enumerate(top_items, start=1):
         keyword = item["keyword"]
