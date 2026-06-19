@@ -14,7 +14,7 @@ from blog_writer import format_readable_html, write_blog_post
 from keyword_fetcher import fetch_keyword_candidates, has_external_keywords, load_seed_keywords
 from keyword_filter import save_posted_keywords, select_top_candidate_items
 from topic_filter import filter_blog_topics, format_trend_context, topic_match_reason
-from tistory_publisher import publish_to_tistory
+from tistory_publisher import publish_to_tistory, validate_tistory_session
 
 load_dotenv()
 
@@ -200,6 +200,11 @@ def main() -> None:
         print(f"  제목: {post['title']}")
         if index < limit:
             time.sleep(int(os.getenv("GEMINI_DELAY_SECONDS", "45")))
+
+    if not _is_dry_run():
+        print("티스토리 세션 확인 중...", flush=True)
+        validate_tistory_session()
+        print("✅ 티스토리 쿠키 유효", flush=True)
 
     _publish_posts(posts)
     if _is_dry_run():
