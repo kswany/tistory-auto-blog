@@ -128,6 +128,7 @@ def _publish_posts(posts: list[dict]) -> None:
 
 
 def main() -> None:
+    print("=== 티스토리 자동 블로그 파이프라인 시작 ===", flush=True)
     if _env_flag("PUBLISH_ONLY"):
         print("PUBLISH_ONLY=1 → logs/ 에 저장된 글만 게시 (AI 새로 작성 안 함)")
         posts = _load_posts_from_logs()
@@ -137,6 +138,7 @@ def main() -> None:
 
     limit = _post_limit()
     seeds, geo = load_seed_keywords()
+    print("키워드 수집 중 (SerpApi)...", flush=True)
     candidates = fetch_keyword_candidates(seeds, geo)
 
     source_counts: dict[str, int] = {}
@@ -188,9 +190,10 @@ def main() -> None:
     for index, item in enumerate(top_items, start=1):
         keyword = item["keyword"]
         trend_context = format_trend_context(item)
-        print(f"\n[{index}/{limit}] '{keyword}' 글 작성 중...")
+        print(f"\n[{index}/{limit}] '{keyword}' 글 작성 중...", flush=True)
         if trend_context:
-            print(f"  트렌드 맥락:\n{trend_context.replace(chr(10), chr(10) + '  ')}")
+            print(f"  트렌드 맥락:\n{trend_context.replace(chr(10), chr(10) + '  ')}", flush=True)
+        print("  Gemini API 호출 중...", flush=True)
         post = write_blog_post(keyword, trend_context=trend_context or None)
         _save_post_log(post)
         posts.append(post)

@@ -247,12 +247,17 @@ def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
 """
 
     generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
+    gemini_timeout = max(30, int(os.getenv("GEMINI_TIMEOUT_SECONDS", "180")))
     max_attempts = 2
     last_error: Exception | None = None
 
     for attempt in range(1, max_attempts + 1):
         try:
-            response = model.generate_content(prompt, generation_config=generation_config)
+            response = model.generate_content(
+                prompt,
+                generation_config=generation_config,
+                request_options={"timeout": gemini_timeout},
+            )
             raw = response.text or ""
             data = _extract_json(raw)
             return _build_post_data(data, keyword)

@@ -24,6 +24,7 @@ jobs:
 
       - name: Run blog pipeline
         env:
+          PYTHONUNBUFFERED: "1"
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
           SERPAPI_GEO: KR
@@ -38,7 +39,7 @@ jobs:
           POST_LIMIT: "5"
           POST_DELAY_SECONDS: "60"
           PUBLISH_RETRIES: "3"
-        run: python src/main.py
+        run: python -u src/main.py
 
       - name: Save posted keyword history
         if: always()
