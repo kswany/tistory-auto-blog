@@ -11,12 +11,13 @@ from pathlib import Path
 import google.generativeai as genai
 from google.api_core import exceptions as google_exceptions
 
-P_STYLE = "margin: 0 0 18px 0; line-height: 1.95; font-size: 16px;"
-H2_STYLE = "margin: 44px 0 22px 0; line-height: 1.45; font-size: 22px; font-weight: 700;"
-UL_STYLE = "margin: 10px 0 26px 0; padding-left: 22px; line-height: 1.9;"
-LI_STYLE = "margin-bottom: 16px;"
-SPACER = '<p style="margin:0;padding:0;height:16px;line-height:16px;font-size:0;">&nbsp;</p>'
-BLOCK_SPACER = '<p style="margin:0;padding:0;height:22px;line-height:22px;font-size:0;">&nbsp;</p>'
+P_STYLE = "margin: 0 0 22px 0; line-height: 1.95; font-size: 16px;"
+H2_STYLE = "margin: 52px 0 24px 0; line-height: 1.45; font-size: 22px; font-weight: 700;"
+UL_STYLE = "margin: 10px 0 28px 0; padding-left: 22px; line-height: 1.9;"
+LI_STYLE = "margin-bottom: 18px;"
+SPACER = '<p style="margin:0;padding:0;height:18px;line-height:18px;font-size:0;">&nbsp;</p>'
+BLOCK_SPACER = '<p style="margin:0;padding:0;height:28px;line-height:28px;font-size:0;">&nbsp;</p>'
+MAX_SENTENCES_PER_PARAGRAPH = 1
 
 
 def _load_blog_config() -> dict:
@@ -86,7 +87,7 @@ def _split_sentences(text: str) -> list[str]:
     return [part.strip() for part in parts if part.strip()]
 
 
-def _chunk_sentences(sentences: list[str], max_per_paragraph: int = 2) -> list[str]:
+def _chunk_sentences(sentences: list[str], max_per_paragraph: int = MAX_SENTENCES_PER_PARAGRAPH) -> list[str]:
     chunks: list[str] = []
     for index in range(0, len(sentences), max_per_paragraph):
         chunk = " ".join(sentences[index : index + max_per_paragraph])
@@ -95,7 +96,7 @@ def _chunk_sentences(sentences: list[str], max_per_paragraph: int = 2) -> list[s
     return chunks
 
 
-def _split_long_paragraph(text: str, max_chars: int = 100) -> list[str]:
+def _split_long_paragraph(text: str, max_chars: int = 70) -> list[str]:
     text = re.sub(r"\s+", " ", text.strip())
     if len(text) <= max_chars:
         return [text]
@@ -104,7 +105,50 @@ def _split_long_paragraph(text: str, max_chars: int = 100) -> list[str]:
     if len(sentences) <= 1:
         return [text]
 
-    return _chunk_sentences(sentences, max_per_paragraph=2)
+    return _chunk_sentences(sentences, max_per_paragraph=MAX_SENTENCES_PER_PARAGRAPH)
+
+
+def _is_spacer_html(html: str) -> bool:
+    return "font-size:0" in html and "height:" in html
+
+
+def _expand_plain_paragraph(inner: str) -> list[str]:
+    plain = _strip_tags(inner)
+    if not plain:
+        return []
+
+    sentences = _split_sentences(plain)
+    if len(sentences) <= MAX_SENTENCES_PER_PARAGRAPH:
+        if "<strong>" in inner:
+            return [_make_paragraph(inner)]
+        return [_make_paragraph(plain)]
+
+    return [_make_paragraph(sentence) for sentence in sentences]
+
+
+def _expand_labeled_paragraph(inner: str) -> list[str]:
+    match = re.match(
+        r"^<strong>([^<]+)</strong>\s*[：:]?\s*(.*)$",
+        inner.strip(),
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if not match:
+        return []
+
+    label = match.group(1).strip()
+    rest = match.group(2).strip()
+    blocks = [_make_paragraph(f"<strong>{label}</strong>")]
+    if not rest:
+        return blocks
+
+    plain = _strip_tags(rest)
+    sentences = _split_sentences(plain)
+    if len(sentences) <= 1:
+        blocks.append(_make_paragraph(rest if rest.startswith("<") else plain))
+        return blocks
+
+    blocks.extend(_make_paragraph(sentence) for sentence in sentences)
+    return blocks
 
 
 def _make_paragraph(content: str) -> str:
@@ -154,14 +198,21 @@ def _add_block_spacers_before_topics(html: str) -> str:
 
 def _apply_paragraph_styles(html: str) -> str:
     def replace_p(match: re.Match[str]) -> str:
+        full_tag = match.group(0)
         inner = match.group(1).strip()
-        if not inner or inner == "&nbsp;" or "height:" in match.group(0):
-            return match.group(0)
-        if inner.startswith("<"):
+
+        if _is_spacer_html(full_tag) or not inner or inner == "&nbsp;":
+            return SPACER
+
+        if re.match(r"^<strong>[^<]+</strong>", inner, flags=re.IGNORECASE):
+            blocks = _expand_labeled_paragraph(inner)
+            if blocks:
+                return SPACER.join(blocks)
+
+        if inner.startswith("<") and "<strong>" not in inner:
             return f'<p style="{P_STYLE}">{inner}</p>'
 
-        parts = _split_long_paragraph(_strip_tags(inner))
-        return "".join(_make_paragraph(part) for part in parts)
+        return SPACER.join(_expand_plain_paragraph(inner))
 
     html = re.sub(r"<p(?:\s[^>]*)?>(.*?)</p>", replace_p, html, flags=re.DOTALL | re.IGNORECASE)
     html = re.sub(r"<h2(?:\s[^>]*)?>", f'<h2 style="{H2_STYLE}">', html, flags=re.IGNORECASE)
@@ -170,11 +221,56 @@ def _apply_paragraph_styles(html: str) -> str:
     return html
 
 
+def _split_dense_list_items(html: str) -> str:
+    def replace_li(match: re.Match[str]) -> str:
+        inner = match.group(1).strip()
+        plain = _strip_tags(inner)
+        sentences = _split_sentences(plain)
+        if len(sentences) <= MAX_SENTENCES_PER_PARAGRAPH:
+            return match.group(0)
+        return "".join(f'<li style="{LI_STYLE}">{sentence}</li>' for sentence in sentences)
+
+    return re.sub(r"<li(?:\s[^>]*)?>(.*?)</li>", replace_li, html, flags=re.DOTALL | re.IGNORECASE)
+
+
+def _enhance_heading_spacing(html: str) -> str:
+    html = re.sub(
+        r"(<h2 style=\"[^\"]+\">.*?</h2>)",
+        rf"{BLOCK_SPACER}\1{SPACER}",
+        html,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    return html
+
+
+def _insert_breathing_room(html: str) -> str:
+    html = re.sub(r"<p(?:\s[^>]*)?>\s*</p>", SPACER, html, flags=re.IGNORECASE)
+    html = re.sub(
+        r"(</p>)\s*(<p style=\"margin: 0 0 22px)",
+        rf"\1{SPACER}\2",
+        html,
+        flags=re.IGNORECASE,
+    )
+    return html
+
+
+def _collapse_duplicate_spacers(html: str) -> str:
+    while SPACER + SPACER in html:
+        html = html.replace(SPACER + SPACER, SPACER)
+    while BLOCK_SPACER + SPACER + SPACER in html:
+        html = html.replace(BLOCK_SPACER + SPACER + SPACER, BLOCK_SPACER + SPACER)
+    return html
+
+
 def format_readable_html(html: str) -> str:
     html = re.sub(r"<div[^>]*>|</div>", "", html.strip())
     html = _apply_paragraph_styles(html)
+    html = _split_dense_list_items(html)
     html = _fix_intro_spacing(html)
     html = _add_block_spacers_before_topics(html)
+    html = _enhance_heading_spacing(html)
+    html = _insert_breathing_room(html)
+    html = _collapse_duplicate_spacers(html)
     return f'<div style="line-height:1.95; word-break:keep-all;">{html}</div>'
 
 
@@ -220,32 +316,53 @@ def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
   "tags": ["태그1", "태그2", "태그3", "태그4", "태그5"]
 }}
 
-[여백·줄바꿈 규칙 - 반드시 지키기]
+[여백·줄바꿈 규칙 - 가독성 최우선, 반드시 지키기]
+
+★ 핵심: 한 p 태그 = 최대 1문장. 2문장 이상 한 p에 넣으면 실패.
 
 1) 서론
 - 1문장: "안녕하세요, 줍줍토리입니다!" 만 단독 p
-- 빈 줄 1개 (spacer p)
-- 다음 문장 각각 별도 p (1~2문장씩)
-- 서론 끝에도 spacer p 1개
+- spacer p 1개
+- 다음 문장 각각 별도 p (1문장씩)
+- 서론 끝 spacer p 1개
 
-2) h2 큰 소제목
-- h2 위쪽 여백 = 공백 2줄 느낌 (h2 태그만 사용, 문단과 분리)
-- h2 아래 공백 1줄 느낌 후 본문 p 시작
-- 예: <h2>정부지원금, 왜 놓치지 말아야 할까요?</h2>
+2) h2 큰 소제목 (3~4개 사용)
+- h2 위·아래 공백 느낌
+- 예: <h2>모두의 카드 정책 개요 및 환급 구조</h2>
 
-3) 유형·항목 나열 (청년/취약계층/육아/소상공인 등)
-- 각 항목: <p><strong>항목명</strong> 설명 1문장.</p> + <p>추가 설명 1문장.</p>
-- 항목과 항목 사이 spacer p 1개 (숨 쉴 공간)
-- ul/li 사용 시 li도 2문장 이내
+3) 소제목·항목 (5~6번 예시처럼)
+- <p><strong>[모두의 카드 유형 비교]</strong></p> 처럼 대괄호 소제목은 단독 p
+- 또는 <p><strong>1. 정부 공식 웹사이트 활용</strong></p> + 다음 p에 설명 1~2문장
+- 항목마다 spacer p 1개
 
-4) 일반 본문
-- p 태그당 1~2문장만
-- 3문장 이상 한 p에 넣지 말 것
+4) ul/li 목록
+- li 1개 = 1문장 (길면 분리)
+- 목록 전후 spacer p
+
+5) 일반 본문
+- p 태그당 1문장만 (절대 벽돌 문단 금지)
 - 핵심어·숫자·날짜는 <strong>
 
-5) 금지
-- 긴 벽돌 문단
-- h2 없이 긴 줄글만 이어 쓰기
+6) 금지
+- 3문장 이상 한 p에 묶기
+- h2 없이 긴 줄글
+- spacer 없이 문단 5개 연속
+
+[body_html 작성 예시 - 이 밀도로 작성]
+<p>안녕하세요, 줍줍토리입니다!</p>
+<p style="margin:0;padding:0;height:18px;line-height:18px;font-size:0;">&nbsp;</p>
+<p>오늘은 ○○ 이슈, 한입에 정리해 드릴게요.</p>
+<p>최근 검색량이 급증한 배경도 함께 짚어 봅니다.</p>
+<p style="margin:0;padding:0;height:18px;line-height:18px;font-size:0;">&nbsp;</p>
+<h2>○○, 지금 왜 주목받을까요?</h2>
+<p style="margin:0;padding:0;height:18px;line-height:18px;font-size:0;">&nbsp;</p>
+<p>첫 번째 핵심 포인트 한 문장.</p>
+<p>두 번째 핵심 포인트 한 문장.</p>
+<p><strong>[확인 방법]</strong></p>
+<p style="margin:0;padding:0;height:18px;line-height:18px;font-size:0;">&nbsp;</p>
+<p><strong>1. 공식 사이트 확인</strong></p>
+<p>설명 첫 문장.</p>
+<p>설명 둘째 문장.</p>
 
 [내용]
 - 본문 {config["min_chars"]}~{config["max_chars"]}자

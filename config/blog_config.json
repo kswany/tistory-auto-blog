@@ -4,5 +4,5 @@
   "categories_hint": "정부정책, 재테크, IT·AI, 생활 이슈",
   "min_chars": 1200,
   "max_chars": 2000,
-  "format_style": "짧은 문단, 문단 사이 여백, 핵심어 bold, h2 소제목, ul/li 목록"
+  "format_style": "1문장 1문단, 문단 사이 spacer, [대괄호] 소제목, 번호 항목, h2 섹션, 핵심어 bold"
 }
