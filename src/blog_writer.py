@@ -27,7 +27,52 @@ def _extract_json(text: str) -> dict:
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
-    return json.loads(text)
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError("Gemini 응답이 JSON 객체가 아닙니다.")
+    return data
+
+
+def _default_tags(keyword: str) -> list[str]:
+    candidates = [keyword.strip(), "재테크", "정부정책", "줍줍토리", "생활정보"]
+    tags: list[str] = []
+    seen: set[str] = set()
+    for tag in candidates:
+        normalized = tag.lower()
+        if tag and normalized not in seen:
+            seen.add(normalized)
+            tags.append(tag)
+    return tags[:5]
+
+
+def _normalize_tags(raw_tags: object, keyword: str) -> list[str]:
+    if isinstance(raw_tags, list):
+        tags = [str(tag).strip() for tag in raw_tags if str(tag).strip()]
+        if tags:
+            return tags[:5]
+    if isinstance(raw_tags, str) and raw_tags.strip():
+        parts = re.split(r"[,，\s]+", raw_tags.strip())
+        tags = [part for part in parts if part]
+        if tags:
+            return tags[:5]
+    return _default_tags(keyword)
+
+
+def _build_post_data(data: dict, keyword: str) -> dict:
+    title = str(data.get("title") or "").strip()
+    body_html_raw = str(data.get("body_html") or data.get("body") or "").strip()
+
+    if not title:
+        title = f"{keyword}, 지금 꼭 알아야 할 정보"
+    if not body_html_raw:
+        raise ValueError("Gemini 응답에 body_html이 없습니다.")
+
+    return {
+        "keyword": keyword,
+        "title": title,
+        "body_html": format_readable_html(body_html_raw),
+        "tags": _normalize_tags(data.get("tags"), keyword),
+    }
 
 
 def _strip_tags(text: str) -> str:
@@ -201,14 +246,20 @@ def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
 - tags 한국어 5개
 """
 
-    response = model.generate_content(prompt)
-    raw = response.text or ""
-    data = _extract_json(raw)
-    body_html = format_readable_html(str(data["body_html"]).strip())
+    generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
+    max_attempts = 2
+    last_error: Exception | None = None
 
-    return {
-        "keyword": keyword,
-        "title": str(data["title"]).strip(),
-        "body_html": body_html,
-        "tags": [str(tag).strip() for tag in data["tags"][:5]],
-    }
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = model.generate_content(prompt, generation_config=generation_config)
+            raw = response.text or ""
+            data = _extract_json(raw)
+            return _build_post_data(data, keyword)
+        except (json.JSONDecodeError, ValueError, KeyError) as exc:
+            last_error = exc
+            if attempt >= max_attempts:
+                break
+            prompt += "\n\n이전 응답에 title, body_html, tags 필드가 빠졌습니다. 세 필드를 모두 포함한 JSON만 다시 출력하세요."
+
+    raise RuntimeError(f"Gemini 글 생성 실패 ({keyword}): {last_error}") from last_error
