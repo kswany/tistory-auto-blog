@@ -18,11 +18,25 @@ from post_quality import append_quality_footer
 MAX_SENTENCES_PER_PARAGRAPH = 1
 KST = timezone(timedelta(hours=9))
 
+GREETING_HINTS = [
+    "안녕하세요, 줍줍토리예요.",
+    "반가워요, 오늘 한입 정보 들고 왔어요.",
+    "안녕하세요! 오늘도 핫한 이슈 하나 짚어볼게요.",
+    "줍줍토리입니다, 잠깐만요 — 이 이슈 정리해 드릴게요.",
+]
+
+CLOSING_HINTS = [
+    "오늘도 끝까지 읽어주셔서 고마워요, 다음 이슈에서 또 만나요.",
+    "도움이 되셨다면 주변에도 한번 공유해 주세요.",
+    "궁금한 점은 글 아래 공식 링크에서 꼭 한번 더 확인해 보세요.",
+    "여기까지 오늘의 한입, 다음에도 쓸모 있는 정보로 올게요.",
+]
+
 INTRO_STYLES = [
-    "키워드·이슈 배경 한 문장으로 바로 시작 (고정 인사·블로그명 인사 금지)",
-    "독자가 헷갈리는 지점을 질문형 한 문장으로 시작",
-    "최근 이슈·검색 급증 이유를 한 문장으로 시작",
-    "이 글의 대상 독자(누가 해당되는지)를 먼저 짚고 시작",
+    "인사 다음 문장: 독자가 검색창에 칠 법한 가려운 질문으로 이어가기",
+    "인사 다음 문장: 이 이슈가 지금 뉴스·검색에 뜬 배경 한 줄",
+    "인사 다음 문장: 이 글이 특히 도움될 대상(누구 해당) 짚기",
+    "인사 다음 문장: 일상 장면 한 줄로 키워드와 연결하기",
 ]
 
 STRUCTURE_VARIANTS = ["narrative", "qa", "checklist", "timeline"]
@@ -280,6 +294,8 @@ def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
     model = genai.GenerativeModel(model_name)
 
     today = datetime.now(KST).strftime("%Y-%m-%d")
+    greeting_hint = random.choice(GREETING_HINTS)
+    closing_hint = random.choice(CLOSING_HINTS)
     intro_style = random.choice(INTRO_STYLES)
     structure_variant = random.choice(STRUCTURE_VARIANTS)
 
@@ -301,12 +317,13 @@ def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
     prompt = f"""
 당신은 한국어 블로그 '{config["blog_name"]}'의 작가입니다.
 독자에게 {config["tone"]} 톤으로 실용 정보를 전달합니다.
+뉴스 기사·백과사전·공문서처럼 딱딱하게 쓰지 마세요.
 
 키워드: {keyword}
 카테고리 방향: {config["categories_hint"]}
 작성 기준일: {today}
 글 구조 유형: {structure_variant}
-서론 스타일: {intro_style}
+서론 전개: {intro_style}
 {trend_section}
 
 [출력 형식 — 엄수]
@@ -314,7 +331,7 @@ def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
 - 설명 문장, 주석, JSON 앞뒤 여백 텍스트 금지.
 
 {{
-  "title": "검색 의도 반영 제목 (28~40자, 과장·상투구 금지)",
+  "title": "검색 의도 반영 제목 (28~40자, 핵심 키워드 앞쪽 배치, 과장·클릭베이트 금지)",
   "body_html": "HTML 본문 (면책·출처 목록은 넣지 말 것 — 시스템이 자동 추가)",
   "tags": ["태그1", "태그2", "태그3", "태그4", "태그5"],
   "sources": [
@@ -323,61 +340,69 @@ def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
   "ymyl": true
 }}
 
+[톤·콘텐츠 — 읽을 맛 나게]
+1) 친구에게 썰 풀듯: "~에 대해 알아보겠습니다", "결론적으로" 같은 AI 상투구 금지.
+2) 가끔 "솔직히", "사실상", "아하" 같은 자연스러운 리액션 (남발 금지).
+3) 어려운 용어·정책어는 일상 비유로 풀기 (예: 독점 → 혼자 시장을 꽉 쥔 상태).
+4) h2 소제목은 독자가 검색할 법한 질문형으로 (예: "Q. ○○, 왜 지금 시끄러운 걸까요?").
+5) 트렌드·뉴스 맥락을 생생하게, 단 기사 문장 복붙·3단어 이상 연속 인용 금지.
+6) 신청 방법·대상·주의사항은 꼭 포함. 확실치 않으면 "공식 발표 기준 확인 필요".
+7) 허위·과장·"제가 직접 신청해 봤는데" 같은 가짜 경험 금지.
+
+[서론·마무리 — 매 글 필수]
+★ 서론 첫 p: 짧은 인사 1문장 (아래 톤 참고, 문장 그대로 복붙 금지).
+  참고 톤: 「{greeting_hint}」
+★ 서론 2~4p: 인사 후 {intro_style}
+★ 본문 마지막 p(면책·출처 전): 짧은 끝맺음 1문장.
+  참고 톤: 「{closing_hint}」
+
 [HTML·가독성]
 ★ 한 p 태그 = 최대 1문장. 2문장 이상 한 p에 넣으면 실패.
 
 1) 서론
-- "안녕하세요, 줍줍토리입니다!" 등 고정 인사·매번 같은 첫 문장 금지.
-- 서론 스타일 지침에 맞춰 키워드·맥락에 맞는 첫 문장 1개로 시작.
-- 이어지는 문장도 각각 별도 p (1문장씩).
+- 첫 p = 짧은 인사 (매번 표현은 다르게, 위 참고 톤만 참고).
+- 이후 문장도 각각 별도 p.
 
 2) h2 소제목 (3~4개)
 - <h2>제목</h2> 만 사용 (인라인 style 금지).
-- 소제목 문구는 매 글마다 다르게.
+- 가능하면 질문형·구체적으로, 매 글 표현 다르게.
 
 3) 목록 (ul/li)
 - li 1개 = 1문장.
-- ul/ol 앞뒤에 여백용 빈 p, &nbsp; p, font-size:0 spacer p 금지.
-- 목록 간격은 ul/li 태그만으로 표현.
+- ul/ol 앞뒤 빈 p, &nbsp; p, spacer p 금지.
 
 4) 일반 본문
-- <p>문장</p> 형태 (p 태그에 margin·height 등 인라인 style 금지).
-- 여백용 <p>&nbsp;</p>, <p style="...height...">, 연속 <br><br><br> 남발 금지.
-- 핵심어·숫자·날짜만 <strong> (남용 금지).
+- <p>문장</p> (p에 margin·height 등 인라인 style 금지).
+- 여백용 <p>&nbsp;</p>, font-size:0 spacer, <br> 연속 남발 금지.
+- 핵심어·숫자·날짜만 <strong>.
 
 5) 금지
-- 3문장 이상 한 p에 묶기
-- h2 없이 긴 줄글
-- 모든 글에 동일한 HTML 패턴·동일한 spacer 코드 반복
+- 3문장 이상 한 p, h2 없는 장문, 매 글 동일 HTML 패턴
 
 [structure_variant별 골격 — 하나만]
-- narrative: 배경 → 핵심 정리 → 실무 팁 → 마무리
-- qa: h2를 "Q. ..." 4~5개, 각 답 2~4문장
-- checklist: h2 "확인 체크리스트" + ul, 조건별 h2 2~3개
-- timeline: h2 "순서·일정" + 단계별 번호 목록
+- narrative: 인사 → 배경 썰 → h2 질문 단락 → 실무 팁 → 짧은 마무리
+- qa: h2를 "Q. ..." 4~5개, 각 답 2~4문장 (1문장 1p)
+- checklist: h2 "체크리스트" + ul, 조건별 h2 2~3개
+- timeline: h2 "순서·일정" + ul/li 단계
 
 [body_html 작성 예시]
-<p>최근 ○○ 검색이 늘면서 ○○ 조건을 헷갈리는 분들이 많습니다.</p>
-<p>핵심만 짚어 드리겠습니다.</p>
-<h2>○○, 지금 왜 주목받을까요</h2>
-<p>첫 번째 핵심 포인트 한 문장.</p>
-<p>두 번째 핵심 포인트 한 문장.</p>
+<p>안녕하세요, 오늘도 한입 정보 들고 왔어요.</p>
+<p>요즘 ○○ 검색 많이 하시더라고요, 저도 처음엔 헷갈렸어요.</p>
+<p>핵심만 쉽게 풀어 드릴게요.</p>
+<h2>Q. ○○, 왜 지금 이렇게 떠오른 걸까요?</h2>
+<p>솔직히 최근 뉴스에서 ○○ 얘기가 줄줄 이어지면서 검색량이 확 튀었거든요.</p>
+<p>쉽게 말하면 ○○ 조건을 <strong>동시에</strong> 맞춰야 하는 경우가 많아서 그래요.</p>
 <ul>
-<li>확인 항목 첫 번째.</li>
-<li>확인 항목 두 번째.</li>
+<li>먼저 본인 해당 여부부터 확인하세요.</li>
+<li>신청 전 필요 서류를 미리 챙기면 덜 헤매요.</li>
 </ul>
+<p>오늘도 끝까지 읽어주셔서 고마워요, 다음 이슈에서 또 만나요.</p>
 
-[내용]
+[분량·출처]
 - 본문 {config["min_chars"]}~{config["max_chars"]}자
-- 트렌드 배경이 있으면 이슈·뉴스 맥락 중심 (뉴스 문장 그대로 복사 금지)
-- 신청 방법, 조건, 주의사항 포함 (확실하지 않으면 "공식 발표 기준 확인 필요" 명시)
-- 허위·과장·허위 1인칭 경험 금지
 - tags 한국어 5개
-
-[출처 sources — 필수]
-- sources에 https 공식 사이트 1~3개 (정부24, 복지로, 국세청, 금융감독원, 해당 부처 .go.kr 등)
-- URL은 실제 공식 도메인만. 확실하지 않으면 기관 메인(https://www.gov.kr/ 등)만 사용
-- ymyl: 세금·지원금·대출·금융·고용 등 돈·정책 관련이면 true, 아니면 false
+- sources: https 공식 사이트 1~3개 (정부24, 복지로, 국세청, 금융감독원 등)
+- ymyl: 세금·지원금·대출·금융·고용 관련이면 true, 아니면 false
 """
 
     generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
