@@ -38,8 +38,9 @@ jobs:
           TISTORY_COOKIE: ${{ secrets.TISTORY_COOKIE }}
           DRY_RUN: "0"
           PUBLISH_ONLY: "0"
-          POST_LIMIT: "5"
-          POST_DELAY_SECONDS: "60"
+          POST_LIMIT: "2"
+          POST_DELAY_SECONDS: "120"
+          VALIDATE_SOURCE_URLS: "0"
           PUBLISH_RETRIES: "3"
         run: python -u src/main.py
 

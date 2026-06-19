@@ -30,7 +30,7 @@ def _is_dry_run() -> bool:
     return _env_flag("DRY_RUN")
 
 
-def _post_limit(default: int = 5) -> int:
+def _post_limit(default: int = 2) -> int:
     return max(1, int(os.getenv("POST_LIMIT", str(default))))
 
 
@@ -205,11 +205,6 @@ def main() -> None:
         print(f"  제목: {post['title']}")
         if index < limit:
             time.sleep(int(os.getenv("GEMINI_DELAY_SECONDS", "45")))
-
-    if not _is_dry_run():
-        print("티스토리 세션 확인 중...", flush=True)
-        validate_tistory_session()
-        print("✅ 티스토리 쿠키 유효", flush=True)
 
     _publish_posts(posts)
     if _is_dry_run():

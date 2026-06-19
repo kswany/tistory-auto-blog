@@ -4,20 +4,28 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import google.generativeai as genai
 from google.api_core import exceptions as google_exceptions
 
-P_STYLE = "margin: 0 0 22px 0; line-height: 1.95; font-size: 16px;"
-H2_STYLE = "margin: 52px 0 24px 0; line-height: 1.45; font-size: 22px; font-weight: 700;"
-UL_STYLE = "margin: 10px 0 28px 0; padding-left: 22px; line-height: 1.9;"
-LI_STYLE = "margin-bottom: 18px;"
-SPACER = '<p style="margin:0;padding:0;height:18px;line-height:18px;font-size:0;">&nbsp;</p>'
-BLOCK_SPACER = '<p style="margin:0;padding:0;height:28px;line-height:28px;font-size:0;">&nbsp;</p>'
+from post_quality import append_quality_footer
+
 MAX_SENTENCES_PER_PARAGRAPH = 1
+KST = timezone(timedelta(hours=9))
+
+INTRO_STYLES = [
+    "키워드·이슈 배경 한 문장으로 바로 시작 (고정 인사·블로그명 인사 금지)",
+    "독자가 헷갈리는 지점을 질문형 한 문장으로 시작",
+    "최근 이슈·검색 급증 이유를 한 문장으로 시작",
+    "이 글의 대상 독자(누가 해당되는지)를 먼저 짚고 시작",
+]
+
+STRUCTURE_VARIANTS = ["narrative", "qa", "checklist", "timeline"]
 
 
 def _load_blog_config() -> dict:
@@ -28,9 +36,18 @@ def _load_blog_config() -> dict:
 def _extract_json(text: str) -> dict:
     text = text.strip()
     if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    data = json.loads(text)
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```\s*$", "", text, flags=re.IGNORECASE)
+        text = text.strip()
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not match:
+            raise
+        data = json.loads(match.group(0))
+
     if not isinstance(data, dict):
         raise ValueError("Gemini 응답이 JSON 객체가 아닙니다.")
     return data
@@ -61,7 +78,7 @@ def _normalize_tags(raw_tags: object, keyword: str) -> list[str]:
     return _default_tags(keyword)
 
 
-def _build_post_data(data: dict, keyword: str) -> dict:
+def _build_post_data(data: dict, keyword: str, today: str) -> dict:
     title = str(data.get("title") or "").strip()
     body_html_raw = str(data.get("body_html") or data.get("body") or "").strip()
 
@@ -70,10 +87,18 @@ def _build_post_data(data: dict, keyword: str) -> dict:
     if not body_html_raw:
         raise ValueError("Gemini 응답에 body_html이 없습니다.")
 
+    body_html = format_readable_html(body_html_raw)
+    body_html = append_quality_footer(
+        body_html,
+        keyword=keyword,
+        today=today,
+        raw_sources=data.get("sources"),
+    )
+
     return {
         "keyword": keyword,
         "title": title,
-        "body_html": format_readable_html(body_html_raw),
+        "body_html": body_html,
         "tags": _normalize_tags(data.get("tags"), keyword),
     }
 
@@ -96,20 +121,56 @@ def _chunk_sentences(sentences: list[str], max_per_paragraph: int = MAX_SENTENCE
     return chunks
 
 
-def _split_long_paragraph(text: str, max_chars: int = 70) -> list[str]:
-    text = re.sub(r"\s+", " ", text.strip())
-    if len(text) <= max_chars:
-        return [text]
-
-    sentences = _split_sentences(text)
-    if len(sentences) <= 1:
-        return [text]
-
-    return _chunk_sentences(sentences, max_per_paragraph=MAX_SENTENCES_PER_PARAGRAPH)
+def _is_spacer_paragraph(full_tag: str, inner: str) -> bool:
+    if "font-size:0" in full_tag and "height:" in full_tag:
+        return True
+    plain = _strip_tags(inner).strip()
+    if not plain:
+        return True
+    return plain in {"&nbsp;", "\u00a0", "&#160;"}
 
 
-def _is_spacer_html(html: str) -> bool:
-    return "font-size:0" in html and "height:" in html
+def _normalize_tag(html: str, tag: str) -> str:
+    pattern = rf"<{tag}\s[^>]*>"
+    return re.sub(pattern, f"<{tag}>", html, flags=re.IGNORECASE)
+
+
+def _normalize_markup(html: str) -> str:
+    for tag in ("p", "h2", "h3", "ul", "ol", "li"):
+        html = _normalize_tag(html, tag)
+    return html
+
+
+def _remove_spacer_paragraphs(html: str) -> str:
+    def replace_p(match: re.Match[str]) -> str:
+        full_tag = match.group(0)
+        inner = match.group(1).strip()
+        if _is_spacer_paragraph(full_tag, inner):
+            return ""
+        return full_tag
+
+    return re.sub(r"<p(?:\s[^>]*)?>(.*?)</p>", replace_p, html, flags=re.DOTALL | re.IGNORECASE)
+
+
+def _strip_spacers_adjacent_to_blocks(html: str) -> str:
+    html = re.sub(
+        r"<p>\s*(?:&nbsp;|\u00a0|&#160;)?\s*</p>\s*(?=<(?:ul|ol|h2|h3))",
+        "",
+        html,
+        flags=re.IGNORECASE,
+    )
+    html = re.sub(
+        r"(?<=</(?:ul|ol|h2|h3)>)\s*<p>\s*(?:&nbsp;|\u00a0|&#160;)?\s*</p>",
+        "",
+        html,
+        flags=re.IGNORECASE,
+    )
+    return html
+
+
+def _collapse_excessive_breaks(html: str) -> str:
+    html = re.sub(r"(<br\s*/?>\s*){3,}", "<br><br>", html, flags=re.IGNORECASE)
+    return html
 
 
 def _expand_plain_paragraph(inner: str) -> list[str]:
@@ -152,48 +213,7 @@ def _expand_labeled_paragraph(inner: str) -> list[str]:
 
 
 def _make_paragraph(content: str) -> str:
-    return f'<p style="{P_STYLE}">{content}</p>'
-
-
-def _fix_intro_spacing(html: str) -> str:
-    match = re.search(r"<p(?:\s[^>]*)?>(.*?)</p>", html, flags=re.DOTALL | re.IGNORECASE)
-    if not match:
-        return html
-
-    inner_html = match.group(1).strip()
-    plain = _strip_tags(inner_html)
-    if "안녕" not in plain and "줍줍토리" not in plain:
-        return html
-
-    sentences = _split_sentences(plain)
-    if len(sentences) < 2:
-        return html
-
-    greeting = sentences[0]
-    if "안녕" not in greeting and "줍줍토리" not in greeting:
-        return html
-
-    rebuilt = [_make_paragraph(greeting), SPACER]
-    rebuilt.extend(_make_paragraph(chunk) for chunk in _chunk_sentences(sentences[1:], 1))
-    replacement = "".join(rebuilt)
-    return html[: match.start()] + replacement + html[match.end() :]
-
-
-def _add_block_spacers_before_topics(html: str) -> str:
-    pattern = re.compile(
-        r"(<p style=\"[^\"]*\">)(\s*<strong>[^<]+</strong>)",
-        flags=re.IGNORECASE,
-    )
-    count = 0
-
-    def replacer(match: re.Match[str]) -> str:
-        nonlocal count
-        count += 1
-        if count == 1:
-            return match.group(0)
-        return BLOCK_SPACER + match.group(0)
-
-    return pattern.sub(replacer, html)
+    return f"<p>{content}</p>"
 
 
 def _apply_paragraph_styles(html: str) -> str:
@@ -201,24 +221,20 @@ def _apply_paragraph_styles(html: str) -> str:
         full_tag = match.group(0)
         inner = match.group(1).strip()
 
-        if _is_spacer_html(full_tag) or not inner or inner == "&nbsp;":
-            return SPACER
+        if _is_spacer_paragraph(full_tag, inner):
+            return ""
 
         if re.match(r"^<strong>[^<]+</strong>", inner, flags=re.IGNORECASE):
             blocks = _expand_labeled_paragraph(inner)
             if blocks:
-                return SPACER.join(blocks)
+                return "".join(blocks)
 
         if inner.startswith("<") and "<strong>" not in inner:
-            return f'<p style="{P_STYLE}">{inner}</p>'
+            return f"<p>{inner}</p>"
 
-        return SPACER.join(_expand_plain_paragraph(inner))
+        return "".join(_expand_plain_paragraph(inner))
 
-    html = re.sub(r"<p(?:\s[^>]*)?>(.*?)</p>", replace_p, html, flags=re.DOTALL | re.IGNORECASE)
-    html = re.sub(r"<h2(?:\s[^>]*)?>", f'<h2 style="{H2_STYLE}">', html, flags=re.IGNORECASE)
-    html = re.sub(r"<ul(?:\s[^>]*)?>", f'<ul style="{UL_STYLE}">', html, flags=re.IGNORECASE)
-    html = re.sub(r"<li(?:\s[^>]*)?>", f'<li style="{LI_STYLE}">', html, flags=re.IGNORECASE)
-    return html
+    return re.sub(r"<p(?:\s[^>]*)?>(.*?)</p>", replace_p, html, flags=re.DOTALL | re.IGNORECASE)
 
 
 def _split_dense_list_items(html: str) -> str:
@@ -227,51 +243,23 @@ def _split_dense_list_items(html: str) -> str:
         plain = _strip_tags(inner)
         sentences = _split_sentences(plain)
         if len(sentences) <= MAX_SENTENCES_PER_PARAGRAPH:
-            return match.group(0)
-        return "".join(f'<li style="{LI_STYLE}">{sentence}</li>' for sentence in sentences)
+            return f"<li>{inner}</li>"
+        return "".join(f"<li>{sentence}</li>" for sentence in sentences)
 
     return re.sub(r"<li(?:\s[^>]*)?>(.*?)</li>", replace_li, html, flags=re.DOTALL | re.IGNORECASE)
 
 
-def _enhance_heading_spacing(html: str) -> str:
-    html = re.sub(
-        r"(<h2 style=\"[^\"]+\">.*?</h2>)",
-        rf"{BLOCK_SPACER}\1{SPACER}",
-        html,
-        flags=re.DOTALL | re.IGNORECASE,
-    )
-    return html
-
-
-def _insert_breathing_room(html: str) -> str:
-    html = re.sub(r"<p(?:\s[^>]*)?>\s*</p>", SPACER, html, flags=re.IGNORECASE)
-    html = re.sub(
-        r"(</p>)\s*(<p style=\"margin: 0 0 22px)",
-        rf"\1{SPACER}\2",
-        html,
-        flags=re.IGNORECASE,
-    )
-    return html
-
-
-def _collapse_duplicate_spacers(html: str) -> str:
-    while SPACER + SPACER in html:
-        html = html.replace(SPACER + SPACER, SPACER)
-    while BLOCK_SPACER + SPACER + SPACER in html:
-        html = html.replace(BLOCK_SPACER + SPACER + SPACER, BLOCK_SPACER + SPACER)
-    return html
-
-
 def format_readable_html(html: str) -> str:
+    """본문 HTML 정리: 1문장 1문단, spacer/인라인 여백 패턴 제거."""
     html = re.sub(r"<div[^>]*>|</div>", "", html.strip())
+    html = _normalize_markup(html)
+    html = _remove_spacer_paragraphs(html)
     html = _apply_paragraph_styles(html)
     html = _split_dense_list_items(html)
-    html = _fix_intro_spacing(html)
-    html = _add_block_spacers_before_topics(html)
-    html = _enhance_heading_spacing(html)
-    html = _insert_breathing_room(html)
-    html = _collapse_duplicate_spacers(html)
-    return f'<div style="line-height:1.95; word-break:keep-all;">{html}</div>'
+    html = _remove_spacer_paragraphs(html)
+    html = _strip_spacers_adjacent_to_blocks(html)
+    html = _collapse_excessive_breaks(html)
+    return f'<div style="line-height:1.85; word-break:keep-all;">{html}</div>'
 
 
 def _gemini_retry_wait(exc: Exception, attempt: int) -> float:
@@ -291,12 +279,21 @@ def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
     model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     model = genai.GenerativeModel(model_name)
 
+    today = datetime.now(KST).strftime("%Y-%m-%d")
+    intro_style = random.choice(INTRO_STYLES)
+    structure_variant = random.choice(STRUCTURE_VARIANTS)
+
     trend_section = ""
     if trend_context and trend_context.strip():
         trend_section = f"""
 [현재 트렌드 배경 — 반드시 반영]
 아래는 실제 급상승 검색·뉴스 맥락입니다. 키워드만 아는 일반론·백과사전식 소개는 금지합니다.
 이 이슈가 지금 뜨는 이유, 관련 뉴스·연관 검색어를 본문 전반에 자연스럽게 녹여 작성하세요.
+
+★ 뉴스·트렌드 재해석 (필수)
+- 아래 뉴스 제목·문장을 그대로 복사·인용·베끼지 마세요 (유사 문서·저품질 판정 위험).
+- 사실 관계만 참고하고, 완전히 당신의 언어로 재해석(Paraphrasing)해 설명하세요.
+- 언론사명·기사 문장 3단어 이상 연속 사용 금지.
 
 {trend_context.strip()}
 """
@@ -307,69 +304,80 @@ def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
 
 키워드: {keyword}
 카테고리 방향: {config["categories_hint"]}
+작성 기준일: {today}
+글 구조 유형: {structure_variant}
+서론 스타일: {intro_style}
 {trend_section}
 
-아래 JSON 형식만 출력하세요. 다른 설명은 금지합니다.
+[출력 형식 — 엄수]
+- 마크다운 코드블록(```) 사용 금지. 순수 JSON 객체 한 개만 출력.
+- 설명 문장, 주석, JSON 앞뒤 여백 텍스트 금지.
+
 {{
-  "title": "SEO에 맞는 제목 (35자 내외)",
-  "body_html": "HTML 본문",
-  "tags": ["태그1", "태그2", "태그3", "태그4", "태그5"]
+  "title": "검색 의도 반영 제목 (28~40자, 과장·상투구 금지)",
+  "body_html": "HTML 본문 (면책·출처 목록은 넣지 말 것 — 시스템이 자동 추가)",
+  "tags": ["태그1", "태그2", "태그3", "태그4", "태그5"],
+  "sources": [
+    {{"name": "기관명", "url": "https://www.go.kr/..."}}
+  ],
+  "ymyl": true
 }}
 
-[여백·줄바꿈 규칙 - 가독성 최우선, 반드시 지키기]
-
-★ 핵심: 한 p 태그 = 최대 1문장. 2문장 이상 한 p에 넣으면 실패.
+[HTML·가독성]
+★ 한 p 태그 = 최대 1문장. 2문장 이상 한 p에 넣으면 실패.
 
 1) 서론
-- 1문장: "안녕하세요, 줍줍토리입니다!" 만 단독 p
-- spacer p 1개
-- 다음 문장 각각 별도 p (1문장씩)
-- 서론 끝 spacer p 1개
+- "안녕하세요, 줍줍토리입니다!" 등 고정 인사·매번 같은 첫 문장 금지.
+- 서론 스타일 지침에 맞춰 키워드·맥락에 맞는 첫 문장 1개로 시작.
+- 이어지는 문장도 각각 별도 p (1문장씩).
 
-2) h2 큰 소제목 (3~4개 사용)
-- h2 위·아래 공백 느낌
-- 예: <h2>모두의 카드 정책 개요 및 환급 구조</h2>
+2) h2 소제목 (3~4개)
+- <h2>제목</h2> 만 사용 (인라인 style 금지).
+- 소제목 문구는 매 글마다 다르게.
 
-3) 소제목·항목 (5~6번 예시처럼)
-- <p><strong>[모두의 카드 유형 비교]</strong></p> 처럼 대괄호 소제목은 단독 p
-- 또는 <p><strong>1. 정부 공식 웹사이트 활용</strong></p> + 다음 p에 설명 1~2문장
-- 항목마다 spacer p 1개
+3) 목록 (ul/li)
+- li 1개 = 1문장.
+- ul/ol 앞뒤에 여백용 빈 p, &nbsp; p, font-size:0 spacer p 금지.
+- 목록 간격은 ul/li 태그만으로 표현.
 
-4) ul/li 목록
-- li 1개 = 1문장 (길면 분리)
-- 목록 전후 spacer p
+4) 일반 본문
+- <p>문장</p> 형태 (p 태그에 margin·height 등 인라인 style 금지).
+- 여백용 <p>&nbsp;</p>, <p style="...height...">, 연속 <br><br><br> 남발 금지.
+- 핵심어·숫자·날짜만 <strong> (남용 금지).
 
-5) 일반 본문
-- p 태그당 1문장만 (절대 벽돌 문단 금지)
-- 핵심어·숫자·날짜는 <strong>
-
-6) 금지
+5) 금지
 - 3문장 이상 한 p에 묶기
 - h2 없이 긴 줄글
-- spacer 없이 문단 5개 연속
+- 모든 글에 동일한 HTML 패턴·동일한 spacer 코드 반복
 
-[body_html 작성 예시 - 이 밀도로 작성]
-<p>안녕하세요, 줍줍토리입니다!</p>
-<p style="margin:0;padding:0;height:18px;line-height:18px;font-size:0;">&nbsp;</p>
-<p>오늘은 ○○ 이슈, 한입에 정리해 드릴게요.</p>
-<p>최근 검색량이 급증한 배경도 함께 짚어 봅니다.</p>
-<p style="margin:0;padding:0;height:18px;line-height:18px;font-size:0;">&nbsp;</p>
-<h2>○○, 지금 왜 주목받을까요?</h2>
-<p style="margin:0;padding:0;height:18px;line-height:18px;font-size:0;">&nbsp;</p>
+[structure_variant별 골격 — 하나만]
+- narrative: 배경 → 핵심 정리 → 실무 팁 → 마무리
+- qa: h2를 "Q. ..." 4~5개, 각 답 2~4문장
+- checklist: h2 "확인 체크리스트" + ul, 조건별 h2 2~3개
+- timeline: h2 "순서·일정" + 단계별 번호 목록
+
+[body_html 작성 예시]
+<p>최근 ○○ 검색이 늘면서 ○○ 조건을 헷갈리는 분들이 많습니다.</p>
+<p>핵심만 짚어 드리겠습니다.</p>
+<h2>○○, 지금 왜 주목받을까요</h2>
 <p>첫 번째 핵심 포인트 한 문장.</p>
 <p>두 번째 핵심 포인트 한 문장.</p>
-<p><strong>[확인 방법]</strong></p>
-<p style="margin:0;padding:0;height:18px;line-height:18px;font-size:0;">&nbsp;</p>
-<p><strong>1. 공식 사이트 확인</strong></p>
-<p>설명 첫 문장.</p>
-<p>설명 둘째 문장.</p>
+<ul>
+<li>확인 항목 첫 번째.</li>
+<li>확인 항목 두 번째.</li>
+</ul>
 
 [내용]
 - 본문 {config["min_chars"]}~{config["max_chars"]}자
-- 트렌드 배경이 있으면 그 이슈·뉴스 맥락 중심으로 작성 (단순 키워드 정의 금지)
-- 신청 방법, 조건, 주의사항 포함
-- 허위·과장 금지
+- 트렌드 배경이 있으면 이슈·뉴스 맥락 중심 (뉴스 문장 그대로 복사 금지)
+- 신청 방법, 조건, 주의사항 포함 (확실하지 않으면 "공식 발표 기준 확인 필요" 명시)
+- 허위·과장·허위 1인칭 경험 금지
 - tags 한국어 5개
+
+[출처 sources — 필수]
+- sources에 https 공식 사이트 1~3개 (정부24, 복지로, 국세청, 금융감독원, 해당 부처 .go.kr 등)
+- URL은 실제 공식 도메인만. 확실하지 않으면 기관 메인(https://www.gov.kr/ 등)만 사용
+- ymyl: 세금·지원금·대출·금융·고용 등 돈·정책 관련이면 true, 아니면 false
 """
 
     generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
@@ -389,7 +397,7 @@ def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
                 )
                 raw = response.text or ""
                 data = _extract_json(raw)
-                return _build_post_data(data, keyword)
+                return _build_post_data(data, keyword, today)
             except google_exceptions.ResourceExhausted as exc:
                 last_error = exc
                 if quota_try >= quota_attempts:
@@ -409,8 +417,9 @@ def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
                 if attempt >= parse_attempts:
                     raise RuntimeError(f"Gemini 글 생성 실패 ({keyword}): {last_error}") from last_error
                 prompt_body += (
-                    "\n\n이전 응답에 title, body_html, tags 필드가 빠졌습니다. "
-                    "세 필드를 모두 포함한 JSON만 다시 출력하세요."
+                    "\n\n이전 응답이 JSON 규칙을 위반했습니다. "
+                    "마크다운 ``` 없이 title, body_html, tags 필드를 모두 포함한 "
+                    "순수 JSON 객체 하나만 다시 출력하세요."
                 )
 
     raise RuntimeError(f"Gemini 글 생성 실패 ({keyword}): {last_error}") from last_error

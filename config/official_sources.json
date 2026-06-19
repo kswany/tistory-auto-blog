@@ -1,0 +1,53 @@
+{
+  "_comment": "출처 URL 검증 허용 도메인 및 키워드별 공식 fallback",
+  "allowed_domain_suffixes": [".go.kr", ".gov.kr", ".or.kr", ".ac.kr"],
+  "allowed_hosts": [
+    "www.gov.kr",
+    "www.bokjiro.go.kr",
+    "www.nts.go.kr",
+    "www.hometax.go.kr",
+    "www.fss.or.kr",
+    "www.bok.or.kr",
+    "kosis.kr",
+    "www.kosis.kr",
+    "www.moel.go.kr",
+    "www.mohw.go.kr",
+    "www.mss.go.kr",
+    "www.fsc.go.kr",
+    "www.korea.kr"
+  ],
+  "keyword_fallbacks": [
+    {
+      "hints": ["연말정산", "세금", "소득", "hometax", "홈택스"],
+      "sources": [
+        {"name": "국세청", "url": "https://www.nts.go.kr/"},
+        {"name": "홈택스", "url": "https://www.hometax.go.kr/"}
+      ]
+    },
+    {
+      "hints": ["지원", "혜택", "청년", "복지", "신청"],
+      "sources": [
+        {"name": "정부24", "url": "https://www.gov.kr/"},
+        {"name": "복지로", "url": "https://www.bokjiro.go.kr/"}
+      ]
+    },
+    {
+      "hints": ["금리", "대출", "적금", "예금", "금융", "ETF", "펀드", "주식"],
+      "sources": [
+        {"name": "금융감독원", "url": "https://www.fss.or.kr/"},
+        {"name": "한국은행", "url": "https://www.bok.or.kr/"}
+      ]
+    },
+    {
+      "hints": ["고용", "취업", "최저임금", "근로"],
+      "sources": [
+        {"name": "고용노동부", "url": "https://www.moel.go.kr/"},
+        {"name": "워크넷", "url": "https://www.work.go.kr/"}
+      ]
+    }
+  ],
+  "default_fallbacks": [
+    {"name": "정부24", "url": "https://www.gov.kr/"},
+    {"name": "복지로", "url": "https://www.bokjiro.go.kr/"}
+  ]
+}
