@@ -11,6 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from blog_writer import format_readable_html, write_blog_post
+from category_mapper import get_category_list, preview_category_name, resolve_category_id
 from keyword_fetcher import fetch_keyword_candidates, has_external_keywords, load_seed_keywords
 from keyword_filter import save_posted_keywords, select_top_candidate_items
 from topic_filter import filter_blog_topics, format_trend_context, topic_match_reason
@@ -67,14 +68,13 @@ def _load_posts_from_logs() -> list[dict]:
     return posts[:limit]
 
 
-def _publish_with_retry(post: dict) -> None:
+def _publish_with_retry(post: dict) -> dict:
     delay = int(os.getenv("POST_DELAY_SECONDS", "30"))
     max_retries = max(1, int(os.getenv("PUBLISH_RETRIES", "3")))
 
     for attempt in range(1, max_retries + 1):
         try:
-            publish_to_tistory(post)
-            return
+            return publish_to_tistory(post)
         except Exception as exc:
             if attempt >= max_retries:
                 raise
@@ -94,19 +94,31 @@ def _publish_posts(posts: list[dict]) -> None:
         print(f"  제목: {post['title']}")
 
         if _is_dry_run():
-            print("  DRY_RUN=1 → 티스토리 게시 생략")
+            keyword = str(post.get("keyword") or "")
+            try:
+                category_id, category_name = resolve_category_id(
+                    keyword,
+                    post.get("tags"),
+                    category_name=post.get("category_name"),
+                )
+                print(
+                    f"  DRY_RUN=1 → 게시 생략 (카테고리: {category_name}, id={category_id})"
+                )
+            except Exception:
+                category_name = preview_category_name(keyword, post.get("tags"))
+                print(f"  DRY_RUN=1 → 게시 생략 (예상 카테고리: {category_name})")
             continue
 
         print("  티스토리 게시 중...")
         try:
-            _publish_with_retry(post)
+            result = _publish_with_retry(post)
         except Exception as exc:
             label = post.get("keyword") or post["title"]
             failed_posts.append(label)
             print(f"  ❌ 최종 게시 실패: {exc}")
             continue
 
-        print("  게시 완료")
+        print(f"  게시 완료 (카테고리: {result.get('category_name', '?')})")
         if post.get("keyword"):
             save_posted_keywords([post["keyword"]])
             published_keywords.append(post["keyword"])
@@ -190,6 +202,8 @@ def main() -> None:
         print("티스토리 세션 확인 중...", flush=True)
         validate_tistory_session()
         print("✅ 티스토리 쿠키 유효", flush=True)
+        categories = get_category_list()
+        print(f"✅ 티스토리 카테고리 {len(categories)}개 로드", flush=True)
 
     posts: list[dict] = []
     for index, item in enumerate(top_items, start=1):

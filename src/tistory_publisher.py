@@ -130,7 +130,14 @@ def publish_to_tistory(post: dict) -> dict:
         )
 
     blog_host = _blog_host()
-    category_id = int(os.getenv("TISTORY_CATEGORY_ID", "0"))
+    from category_mapper import resolve_category_id
+
+    keyword = str(post.get("keyword") or post.get("title") or "")
+    category_id, category_name = resolve_category_id(
+        keyword,
+        post.get("tags"),
+        category_name=post.get("category_name"),
+    )
     tags = ",".join(post.get("tags", []))
 
     payload = {
@@ -166,6 +173,8 @@ def publish_to_tistory(post: dict) -> dict:
     if data.get("success") is False:
         raise RuntimeError(f"티스토리 게시 실패: {data}")
 
+    data["category_id"] = category_id
+    data["category_name"] = category_name
     return data
 
 
