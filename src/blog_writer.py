@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 import google.generativeai as genai
+from google.api_core import exceptions as google_exceptions
 
 P_STYLE = "margin: 0 0 18px 0; line-height: 1.95; font-size: 16px;"
 H2_STYLE = "margin: 44px 0 22px 0; line-height: 1.45; font-size: 22px; font-weight: 700;"
@@ -176,6 +178,13 @@ def format_readable_html(html: str) -> str:
     return f'<div style="line-height:1.95; word-break:keep-all;">{html}</div>'
 
 
+def _gemini_retry_wait(exc: Exception, attempt: int) -> float:
+    match = re.search(r"retry in ([0-9.]+)s", str(exc), flags=re.IGNORECASE)
+    if match:
+        return float(match.group(1)) + 3
+    return min(120.0, 20.0 * attempt)
+
+
 def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -248,23 +257,43 @@ def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
 
     generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
     gemini_timeout = max(30, int(os.getenv("GEMINI_TIMEOUT_SECONDS", "180")))
-    max_attempts = 2
+    parse_attempts = 2
+    quota_attempts = max(1, int(os.getenv("GEMINI_QUOTA_RETRIES", "3")))
     last_error: Exception | None = None
 
-    for attempt in range(1, max_attempts + 1):
-        try:
-            response = model.generate_content(
-                prompt,
-                generation_config=generation_config,
-                request_options={"timeout": gemini_timeout},
-            )
-            raw = response.text or ""
-            data = _extract_json(raw)
-            return _build_post_data(data, keyword)
-        except (json.JSONDecodeError, ValueError, KeyError) as exc:
-            last_error = exc
-            if attempt >= max_attempts:
+    for quota_try in range(1, quota_attempts + 1):
+        prompt_body = prompt
+        for attempt in range(1, parse_attempts + 1):
+            try:
+                response = model.generate_content(
+                    prompt_body,
+                    generation_config=generation_config,
+                    request_options={"timeout": gemini_timeout},
+                )
+                raw = response.text or ""
+                data = _extract_json(raw)
+                return _build_post_data(data, keyword)
+            except google_exceptions.ResourceExhausted as exc:
+                last_error = exc
+                if quota_try >= quota_attempts:
+                    raise RuntimeError(
+                        f"Gemini API 일일/분당 한도 초과 ({keyword}). "
+                        "내일 다시 시도하거나 GEMINI_MODEL 변경·유료 플랜을 확인하세요."
+                    ) from exc
+                wait = _gemini_retry_wait(exc, quota_try)
+                print(
+                    f"  Gemini 한도 초과, {wait:.0f}초 후 재시도 ({quota_try}/{quota_attempts})...",
+                    flush=True,
+                )
+                time.sleep(wait)
                 break
-            prompt += "\n\n이전 응답에 title, body_html, tags 필드가 빠졌습니다. 세 필드를 모두 포함한 JSON만 다시 출력하세요."
+            except (json.JSONDecodeError, ValueError, KeyError) as exc:
+                last_error = exc
+                if attempt >= parse_attempts:
+                    raise RuntimeError(f"Gemini 글 생성 실패 ({keyword}): {last_error}") from last_error
+                prompt_body += (
+                    "\n\n이전 응답에 title, body_html, tags 필드가 빠졌습니다. "
+                    "세 필드를 모두 포함한 JSON만 다시 출력하세요."
+                )
 
     raise RuntimeError(f"Gemini 글 생성 실패 ({keyword}): {last_error}") from last_error

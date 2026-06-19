@@ -199,7 +199,7 @@ def main() -> None:
         posts.append(post)
         print(f"  제목: {post['title']}")
         if index < limit:
-            time.sleep(3)
+            time.sleep(int(os.getenv("GEMINI_DELAY_SECONDS", "45")))
 
     _publish_posts(posts)
     if _is_dry_run():

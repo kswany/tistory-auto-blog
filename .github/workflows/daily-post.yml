@@ -26,6 +26,8 @@ jobs:
         env:
           PYTHONUNBUFFERED: "1"
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash
+          GEMINI_DELAY_SECONDS: "45"
           SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
           SERPAPI_GEO: KR
           SERPAPI_ONLY_ACTIVE: "1"
