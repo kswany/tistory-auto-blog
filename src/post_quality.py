@@ -12,8 +12,7 @@ import requests
 
 ROOT = Path(__file__).resolve().parents[1]
 USER_AGENT = "tistory-auto-blog/1.0 (source-url-check)"
-FOOTER_MARKER = "참고 및 면책"
-MIN_SOURCES = 1
+FOOTER_MARKER = "기준 참고용 · 공식 확인"
 MAX_SOURCES = 3
 
 
@@ -100,6 +99,7 @@ def normalize_sources(
     keyword: str,
     *,
     config: dict | None = None,
+    allow_fallback: bool = False,
 ) -> list[dict[str, str]]:
     config = config or _load_official_sources_config()
     candidates: list[dict[str, str]] = []
@@ -125,7 +125,7 @@ def normalize_sources(
         if len(validated) >= MAX_SOURCES:
             break
 
-    if len(validated) < MIN_SOURCES:
+    if allow_fallback:
         for fallback in _pick_fallback_sources(keyword, config):
             url = fallback["url"]
             if url in seen_urls:
@@ -133,26 +133,25 @@ def normalize_sources(
             if validate_source_url(url, config):
                 validated.append({"name": fallback["name"], "url": url})
                 seen_urls.add(url)
-            if len(validated) >= MIN_SOURCES:
+            if len(validated) >= MAX_SOURCES:
                 break
 
     return validated[:MAX_SOURCES]
 
 
-def build_disclaimer_footer(today: str, sources: list[dict[str, str]]) -> str:
-    items = "".join(
+def build_source_footer(today: str, sources: list[dict[str, str]]) -> str:
+    link_style = "color:#7a7a7a;text-decoration:underline;"
+    links = ", ".join(
         (
-            f'<li><a href="{source["url"]}" rel="noopener noreferrer" '
-            f'target="_blank">{source["name"]}</a></li>'
+            f'<a href="{source["url"]}" rel="noopener noreferrer" '
+            f'target="_blank" style="{link_style}">{source["name"]}</a>'
         )
         for source in sources
     )
     return (
-        f"<h2>{FOOTER_MARKER}</h2>"
-        f"<p>이 글은 <strong>{today}</strong> 기준 공개 정보를 바탕으로 정리한 참고용 콘텐츠입니다.</p>"
-        "<p>신청 조건·금액·기간·자격 요건은 정책 변경될 수 있습니다.</p>"
-        "<p>반드시 아래 공식 출처에서 최종 확인하세요.</p>"
-        f"<ul>{items}</ul>"
+        '<p style="margin-top:28px;font-size:13px;line-height:1.55;color:#888;">'
+        f"{today} {FOOTER_MARKER}: {links}"
+        "</p>"
     )
 
 
@@ -163,14 +162,14 @@ def append_quality_footer(
     today: str,
     raw_sources: object,
 ) -> str:
-    if FOOTER_MARKER in body_html:
+    if FOOTER_MARKER in body_html or "참고 및 면책" in body_html:
         return body_html
 
-    sources = normalize_sources(raw_sources, keyword)
+    sources = normalize_sources(raw_sources, keyword, allow_fallback=False)
     if not sources:
         return body_html
 
-    footer = build_disclaimer_footer(today, sources)
+    footer = build_source_footer(today, sources)
     inner = re.sub(r"</div>\s*$", "", body_html.strip())
     if inner.startswith('<div style="'):
         return f"{inner}{footer}</div>"
