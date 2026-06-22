@@ -290,7 +290,7 @@ def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
 
     config = _load_blog_config()
     genai.configure(api_key=api_key)
-    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
     model = genai.GenerativeModel(model_name)
 
     today = datetime.now(KST).strftime("%Y-%m-%d")
