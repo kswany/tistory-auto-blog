@@ -68,7 +68,7 @@ def _extract_json(text: str) -> dict:
 
 
 def _default_tags(keyword: str) -> list[str]:
-    candidates = [keyword.strip(), "재테크", "정부정책", "줍줍토리", "생활정보"]
+    candidates = [keyword.strip(), "주식", "AI", "개발", "줍줍토리"]
     tags: list[str] = []
     seen: set[str] = set()
     for tag in candidates:
@@ -321,6 +321,7 @@ def write_blog_post(keyword: str, trend_context: str | None = None) -> dict:
 
 키워드: {keyword}
 카테고리 방향: {config["categories_hint"]}
+작성 범위 (엄수): {config.get("topic_scope", config["categories_hint"])}
 작성 기준일: {today}
 글 구조 유형: {structure_variant}
 서론 전개: {intro_style}

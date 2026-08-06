@@ -1,13 +1,18 @@
 {
   "keywords": [
-    "정부지원금",
-    "청년혜택",
-    "연금저축",
-    "재테크",
-    "K패스",
-    "AI",
-    "가요대축제"
+    "코스피",
+    "나스닥",
+    "비트코인",
+    "이더리움",
+    "리플",
+    "기준금리",
+    "GPT",
+    "Cursor AI",
+    "Claude",
+    "Gemini",
+    "Kimi",
+    "Python"
   ],
   "geo": "KR",
-  "_comment": "줍줍토리(투자·정책·IT·이슈) — Google Trends 연관검색어 수집용 시드"
+  "_comment": "SerpApi fallback 시드 — 주식·코인·경제·AI·개발 주제만"
 }

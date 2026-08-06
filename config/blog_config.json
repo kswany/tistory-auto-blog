@@ -1,7 +1,8 @@
 {
   "blog_name": "줍줍토리의 오늘 한입 정보",
   "tone": "친한 후배에게 핫한 이슈 썰 풀듯, 쉽고 재미있지만 정보는 정확하게",
-  "categories_hint": "정부정책, 재테크, IT·AI, 생활 이슈",
+  "categories_hint": "국내·해외주식, 비트코인·이더리움·리플, 선물·현물, 경제·정책, AI 도구, 개발·코딩",
+  "topic_scope": "국내주식·해외주식, 비트코인·이더리움·리플, 선물·현물 거래, 경제·정책, AI(Claude Code·Cursor·Gemini·Kimi K3·GPT), 개발·코딩 관련 기사만 작성. 연예·스포츠·연금·부동산·일상·생활정보는 다루지 않음.",
   "min_chars": 1200,
   "max_chars": 2000,
   "format_style": "1문장 1문단, plain p/h2/ul, 인라인 spacer 금지, 서론·구조 매번 다름"
